@@ -37,9 +37,9 @@ func main() {
 	// 设置 Gin 模式
 	gin.SetMode(gin.ReleaseMode)
 	
-	// 创建路由
+	// 创建路由（自定义日志，只记录错误和慢请求）
 	router := gin.New()
-	router.Use(gin.Logger())
+	router.Use(customLogger())
 	router.Use(gin.Recovery())
 	
 	// 启用 CORS
@@ -92,6 +92,36 @@ func main() {
 	}
 	
 	log.Println("✅ 服务器已关闭")
+}
+
+// customLogger 自定义日志中间件（只记录慢请求和错误）
+func customLogger() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+		path := c.Request.URL.Path
+		
+		c.Next()
+		
+		// 跳过静态资源
+		if path == "/" || 
+		   c.Request.URL.Path == "/assets/css/style.css" ||
+		   c.Request.URL.Path == "/assets/js/app.js" {
+			return
+		}
+		
+		latency := time.Since(start)
+		statusCode := c.Writer.Status()
+		
+		// 只记录错误请求或慢请求（>500ms）
+		if statusCode >= 400 || latency > 500*time.Millisecond {
+			log.Printf("[GIN] %d | %13v | %s | %s",
+				statusCode,
+				latency,
+				c.Request.Method,
+				path,
+			)
+		}
+	}
 }
 
 // corsMiddleware CORS 中间件

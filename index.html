@@ -1019,7 +1019,6 @@
             mounted() {
                 this.fetchData();
                 this.fetchHistory();
-                this.fetchNextPrediction();
                 this.startDynamicUpdate();
                 this.startLocalCountdown();
             },
@@ -1074,8 +1073,6 @@
                             this.config = json.config; // Update with returned config
                             alert('配置已保存');
                             this.closeSettings();
-                            // Refresh prediction
-                            this.fetchNextPrediction();
                         } else {
                             alert('保存失败: ' + json.message);
                         }
@@ -1087,17 +1084,6 @@
                     }
                 },
 
-                async fetchNextPrediction() {
-                    try {
-                        const response = await fetch('/api/next-prediction');
-                        const json = await response.json();
-                        if (json.success) {
-                            this.nextPrediction = json.data;
-                        }
-                    } catch (error) {
-                        console.error('Failed to fetch next prediction:', error);
-                    }
-                },
 
                 formatTime(seconds) {
                     if (!seconds) return '--';
@@ -1121,7 +1107,6 @@
                 startDynamicUpdate() {
                     const update = () => {
                         this.fetchData();
-                        this.fetchNextPrediction();
 
                         // 只在显示第一页且没有筛选时自动刷新历史记录
                         if (this.historyPage === 1 && !this.realOnly) {

@@ -79,13 +79,58 @@ type StrategyManager struct {
 // NewStrategyManager 创建策略管理器实例
 func NewStrategyManager(db *gorm.DB) *StrategyManager {
 	now := time.Now()
-	return &StrategyManager{
+	m := &StrategyManager{
 		db:         db,
 		strategies: make(map[string]*StrategyState),
 		updatedAt:  now,
 		startTime:  now,                    // 记录启动时间
 		config:     DefaultStrategyConfig(), // 使用默认配置
 	}
+	
+	// 从数据库加载配置
+	m.loadConfigFromDB()
+	
+	return m
+}
+
+// loadConfigFromDB 从数据库加载配置
+func (m *StrategyManager) loadConfigFromDB() {
+	var dbConfig models.SystemConfig
+	result := m.db.First(&dbConfig)
+	
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
+			// 数据库中没有配置记录，创建默认配置
+			dbConfig = models.SystemConfig{
+				EntryCondition:     m.config.EntryCondition,
+				ExitCondition:      m.config.ExitCondition,
+				Hot3BetAmount:      m.config.Hot3BetAmount,
+				Balanced4BetAmount: m.config.Balanced4BetAmount,
+				Hot3Enabled:        m.config.Hot3Enabled,
+				Balanced4Enabled:   m.config.Balanced4Enabled,
+			}
+			if err := m.db.Create(&dbConfig).Error; err != nil {
+				log.Printf("❌ 创建默认配置失败: %v", err)
+			} else {
+				log.Println("✅ 已创建并加载默认配置")
+			}
+		} else {
+			log.Printf("❌ 加载配置失败: %v", result.Error)
+		}
+		return
+	}
+	
+	// 从数据库加载配置
+	m.config = StrategyConfig{
+		EntryCondition:     dbConfig.EntryCondition,
+		ExitCondition:      dbConfig.ExitCondition,
+		Hot3BetAmount:      dbConfig.Hot3BetAmount,
+		Balanced4BetAmount: dbConfig.Balanced4BetAmount,
+		Hot3Enabled:        dbConfig.Hot3Enabled,
+		Balanced4Enabled:   dbConfig.Balanced4Enabled,
+	}
+	
+	log.Println("✅ 已从数据库加载配置")
 }
 
 // getStrategyBetAmount 根据策略名称获取下注金额
@@ -131,7 +176,31 @@ func (m *StrategyManager) UpdateConfig(newConfig StrategyConfig) StrategyConfig 
 		m.config.Hot3BetAmount, m.config.Balanced4BetAmount,
 		m.config.Hot3Enabled, m.config.Balanced4Enabled)
 
+	// 保存配置到数据库
+	m.saveConfigToDB()
+
 	return m.config
+}
+
+// saveConfigToDB 保存配置到数据库（调用前需要持有锁）
+func (m *StrategyManager) saveConfigToDB() {
+	// 更新数据库中的配置（ID=1）
+	dbConfig := models.SystemConfig{
+		ID:                 1,
+		EntryCondition:     m.config.EntryCondition,
+		ExitCondition:      m.config.ExitCondition,
+		Hot3BetAmount:      m.config.Hot3BetAmount,
+		Balanced4BetAmount: m.config.Balanced4BetAmount,
+		Hot3Enabled:        m.config.Hot3Enabled,
+		Balanced4Enabled:   m.config.Balanced4Enabled,
+	}
+	
+	// 使用 Save 方法（存在则更新，不存在则创建）
+	if err := m.db.Save(&dbConfig).Error; err != nil {
+		log.Printf("❌ 保存配置到数据库失败: %v", err)
+	} else {
+		log.Println("✅ 配置已保存到数据库")
+	}
 }
 
 // UpdatePredictions 更新策略预测（写锁）
@@ -457,7 +526,8 @@ func (m *StrategyManager) GetNextPrediction() NextPredictionResult {
 			betAmount = m.config.Balanced4BetAmount
 		}
 
-		if enabled && len(state.Predictions) > 0 {
+		// 只返回实盘状态的预测（虚盘不返回）
+		if enabled && len(state.Predictions) > 0 && state.Status == StatusReal {
 			strategies = append(strategies, NextPredictionItem{
 				Name:        state.Name,
 				Predictions: state.Predictions,

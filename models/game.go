@@ -68,3 +68,19 @@ type StrategyHistory struct {
 func (StrategyHistory) TableName() string {
 	return "strategy_history"
 }
+
+// SystemConfig 系统配置表（单行存储）
+type SystemConfig struct {
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	EntryCondition     int        `gorm:"column:entry_condition;default:2" json:"entry_condition"`           // 连赢几把进场
+	ExitCondition      int        `gorm:"column:exit_condition;default:1" json:"exit_condition"`             // 连输几把离场
+	Hot3BetAmount      float64    `gorm:"column:hot3_bet_amount;default:100" json:"hot3_bet_amount"`         // 热门3码下注金额
+	Balanced4BetAmount float64    `gorm:"column:balanced4_bet_amount;default:100" json:"balanced4_bet_amount"` // 均衡4码下注金额
+	Hot3Enabled        bool       `gorm:"column:hot3_enabled;default:true" json:"hot3_enabled"`              // 热门3码启用
+	Balanced4Enabled   bool       `gorm:"column:balanced4_enabled;default:true" json:"balanced4_enabled"`    // 均衡4码启用
+	UpdatedAt          *time.Time `gorm:"column:updated_at" json:"updated_at"`
+}
+
+func (SystemConfig) TableName() string {
+	return "system_config"
+}

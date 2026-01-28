@@ -33,7 +33,7 @@ func Load() *Config {
 	}
 
 	AppConfig = config
-	log.Printf("✅ 配置加载完成: %s:%s/%s", config.DBHost, config.DBPort, config.DBName)
+	log.Println("✅ 配置加载完成")
 	return config
 }
 

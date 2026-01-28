@@ -83,8 +83,7 @@ func (e *Engine) tick() {
 	// 8. 计算下一期期号（预测的目标期号）
 	nextRoundID := calcNextRoundID(latest.RoundID)
 
-	log.Printf("  🎯 热门3码: %v (目标期: %s)", hot3, nextRoundID)
-	log.Printf("  🎯 均衡4码: %v (目标期: %s)", balanced4, nextRoundID)
+	log.Printf("  🎯 预测目标: %s | 热门3码: %v | 均衡4码: %v", nextRoundID, hot3, balanced4)
 
 	// 9. 更新策略预测
 	// currentRoundID=当前已开奖期号, targetRoundID=预测目标期号
