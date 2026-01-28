@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="奔驰宝马策略分析系统 - Web3科技风">
+    <title>策略分析系统 | V3.0</title>
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        'neon': {
+                            'blue': '#00D9FF',
+                            'purple': '#B537F2',
+                            'pink': '#FF2EF2',
+                            'cyan': '#00FFF0',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: #4B5563 #1F2937;
+        }
+        
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #1F2937;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #4B5563;
+            border-radius: 4px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6B7280;
+        }
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0A0E1A;
+            color: #E5E7EB;
+        }
+        
+        /* 网格背景 */
+        .grid-bg {
+            background-image: 
+                linear-gradient(rgba(0, 217, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 217, 255, 0.05) 1px, transparent 1px);
+            background-size: 40px 40px;
+        }
+        
+        /* 渐变边框 */
+        .gradient-border {
+            position: relative;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(0, 217, 255, 0.1), rgba(181, 55, 242, 0.1));
+            padding: 1px;
+        }
+        
+        .gradient-border-content {
+            background: rgba(17, 24, 39, 0.8);
+            border-radius: 15px;
+            height: 100%;
+        }
+        
+        /* 玻璃态效果 */
+        .glass {
+            background: rgba(31, 41, 55, 0.4);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        /* 霓虹光效 */
+        .neon-glow {
+            box-shadow: 0 0 20px rgba(0, 217, 255, 0.3),
+                        0 0 40px rgba(0, 217, 255, 0.2),
+                        inset 0 0 20px rgba(0, 217, 255, 0.1);
+        }
+        
+        .neon-text {
+            text-shadow: 0 0 10px rgba(0, 217, 255, 0.8),
+                         0 0 20px rgba(0, 217, 255, 0.6),
+                         0 0 30px rgba(0, 217, 255, 0.4);
+        }
+        
+        /* 脉冲动画 */
+        @keyframes pulse-ring {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.1); opacity: 0.8; }
+        }
+        
+        .pulse-ring {
+            animation: pulse-ring 2s ease-in-out infinite;
+        }
+        
+        /* 滑动进入动画 */
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .slide-in {
+            animation: slideIn 0.5s ease-out;
+        }
+        
+        /* 车型标签 */
+        .car-tag {
+            transition: all 0.3s ease;
+        }
+        
+        .car-tag:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 217, 255, 0.4);
+        }
+    </style>
+</head>
+<body class="grid-bg">
+    <div id="app" class="min-h-screen">
+        <!-- 顶部导航 -->
+        <nav class="fixed top-0 left-0 right-0 z-50 glass">
+            <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-neon-blue to-neon-purple flex items-center justify-center neon-glow">
+                            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        </div>
+                        <div>
+                            <h1 class="text-xl font-bold text-white">策略分析系统</h1>
+                            <p class="text-xs text-gray-400 font-mono">V3.0 TURBO</p>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center space-x-4">
+                        <div class="text-right">
+                            <div class="text-xs text-gray-400">当前期号</div>
+                            <div class="text-sm font-mono text-neon-cyan" v-if="data">{{ data.round_id || '--' }}</div>
+                        </div>
+                        <div class="w-2 h-2 rounded-full bg-green-500 pulse-ring"></div>
+                    </div>
+                </div>
+            </div>
+        </nav>
+        
+        <!-- 主内容区 -->
+        <main class="pt-24 pb-12 px-4">
+            <div class="max-w-7xl mx-auto">
+                <!-- 倒计时卡片 -->
+                <div class="gradient-border mb-8 slide-in">
+                    <div class="gradient-border-content p-8">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <div class="text-center">
+                                <div class="text-gray-400 text-sm mb-2">下一期</div>
+                                <div class="text-3xl font-bold font-mono text-neon-blue neon-text" v-if="data">
+                                    {{ data.next_round || '--' }}
+                                </div>
+                            </div>
+                            
+                            <div class="text-center">
+                                <div class="text-gray-400 text-sm mb-2">倒计时</div>
+                                <div class="text-5xl font-bold font-mono text-white" v-if="data">
+                                    {{ data.countdown !== undefined ? data.countdown : '--' }}<span class="text-2xl text-gray-400">s</span>
+                                </div>
+                            </div>
+                            
+                            <div class="text-center">
+                                <div class="text-gray-400 text-sm mb-2">已运行</div>
+                                <div class="text-3xl font-bold font-mono text-neon-purple" v-if="data">
+                                    {{ data.time_passed !== undefined ? data.time_passed : '--' }}<span class="text-xl text-gray-400">s</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 策略卡片区 -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <div v-for="(strategy, index) in strategies" :key="index" class="glass rounded-2xl p-6 hover:border-neon-blue transition-all duration-300 cursor-pointer slide-in" :style="{animationDelay: index * 0.1 + 's'}">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-xl font-semibold text-white">{{ strategy.name }}</h3>
+                            <div class="px-3 py-1 rounded-full text-xs font-mono bg-gradient-to-r from-neon-blue/20 to-neon-purple/20 text-neon-cyan border border-neon-cyan/30">
+                                {{ strategy.predictions.length }}码
+                            </div>
+                        </div>
+                        
+                        <div class="flex flex-wrap gap-2">
+                            <div v-for="car in strategy.predictions" :key="car" 
+                                 class="car-tag px-4 py-2 rounded-lg bg-gradient-to-r from-gray-800 to-gray-900 border border-gray-700 text-sm font-medium text-white">
+                                {{ car }}
+                            </div>
+                        </div>
+                        
+                        <div class="mt-4 pt-4 border-t border-gray-700">
+                            <div class="text-xs text-gray-400">预测时间: <span class="font-mono text-neon-cyan" v-if="data">{{ data.updated_at }}</span></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 实时数据流 -->
+                <div class="glass rounded-2xl p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-2xl font-bold text-white">实时数据流</h2>
+                        <div class="flex items-center space-x-2 text-sm text-gray-400">
+                            <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                            <span>LIVE</span>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <div class="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                            <div class="text-xs text-gray-400 mb-1">系统状态</div>
+                            <div class="text-lg font-bold text-green-400">● 运行中</div>
+                        </div>
+                        
+                        <div class="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                            <div class="text-xs text-gray-400 mb-1">刷新间隔</div>
+                            <div class="text-lg font-bold text-neon-blue font-mono">2s</div>
+                        </div>
+                        
+                        <div class="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                            <div class="text-xs text-gray-400 mb-1">策略数量</div>
+                            <div class="text-lg font-bold text-neon-purple font-mono">2</div>
+                        </div>
+                        
+                        <div class="bg-gray-800/50 rounded-xl p-4 border border-gray-700">
+                            <div class="text-xs text-gray-400 mb-1">响应时间</div>
+                            <div class="text-lg font-bold text-neon-cyan font-mono">&lt;1ms</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+        
+        <!-- 底部 -->
+        <footer class="text-center py-6 text-gray-500 text-sm">
+            <div class="flex items-center justify-center space-x-2">
+                <span>Powered by</span>
+                <span class="text-neon-blue font-semibold">V3.0 Engine</span>
+                <span>•</span>
+                <span class="font-mono">No Lock Architecture</span>
+            </div>
+        </footer>
+    </div>
+    
+    <!-- Vue 3 -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    
+    <script>
+        const { createApp } = Vue;
+        
+        createApp({
+            data() {
+                return {
+                    data: null,
+                    strategies: [],
+                    updateTimer: null
+                }
+            },
+            
+            mounted() {
+                this.fetchData();
+                this.updateTimer = setInterval(() => {
+                    this.fetchData();
+                }, 2000);
+            },
+            
+            beforeUnmount() {
+                if (this.updateTimer) {
+                    clearInterval(this.updateTimer);
+                }
+            },
+            
+            methods: {
+                async fetchData() {
+                    try {
+                        const response = await fetch('/api/status');
+                        const json = await response.json();
+                        this.data = json;
+                        this.strategies = json.strategies || [];
+                    } catch (error) {
+                        console.error('获取数据失败:', error);
+                    }
+                }
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
