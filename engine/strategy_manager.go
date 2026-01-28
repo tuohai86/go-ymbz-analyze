@@ -589,17 +589,17 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 		params.PageSize = 100
 	}
 
-	// 构建查询
-	query := m.db.Model(&models.StrategyHistory{})
+	// 构建基础查询条件
+	baseQuery := m.db.Model(&models.StrategyHistory{})
 	
 	// 筛选实盘记录
 	if params.RealOnly {
-		query = query.Where("status = ?", StatusReal)
+		baseQuery = baseQuery.Where("status = ?", StatusReal)
 	}
 
-	// 查询总数
+	// 查询总数（使用新的 Session 避免污染）
 	var total int64
-	if err := query.Count(&total).Error; err != nil {
+	if err := baseQuery.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		log.Printf("❌ 查询历史记录总数失败: %v", err)
 		return HistoryResult{
 			Records:    []HistoryRecord{},
@@ -613,10 +613,11 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 	// 计算总页数
 	totalPages := int((total + int64(params.PageSize) - 1) / int64(params.PageSize))
 
-	// 分页查询
+	// 分页查询（使用新的 Session）
 	offset := (params.Page - 1) * params.PageSize
 	var dbRecords []models.StrategyHistory
-	err := query.Order("created_at DESC, id DESC").
+	err := baseQuery.Session(&gorm.Session{}).
+		Order("created_at DESC, id DESC").
 		Limit(params.PageSize).
 		Offset(offset).
 		Find(&dbRecords).Error
