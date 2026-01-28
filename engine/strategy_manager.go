@@ -4,6 +4,7 @@ import (
 	"benz-sniper/models"
 	"encoding/json"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,11 +17,27 @@ const (
 	StatusReal    = 1 // 实盘/下注
 )
 
-// 进场/离场配置
-const (
-	EntryCondition = 2 // 连赢2把进场
-	ExitCondition  = 1 // 连输1把离场
-)
+// StrategyConfig 策略配置（可动态修改）
+type StrategyConfig struct {
+	EntryCondition     int     `json:"entry_condition"`      // 连赢几把进场
+	ExitCondition      int     `json:"exit_condition"`       // 连输几把离场
+	Hot3BetAmount      float64 `json:"hot3_bet_amount"`      // 热门3码下注金额
+	Balanced4BetAmount float64 `json:"balanced4_bet_amount"` // 均衡4码下注金额
+	Hot3Enabled        bool    `json:"hot3_enabled"`         // 热门3码启用（用于预测接口）
+	Balanced4Enabled   bool    `json:"balanced4_enabled"`    // 均衡4码启用（用于预测接口）
+}
+
+// DefaultStrategyConfig 返回默认配置
+func DefaultStrategyConfig() StrategyConfig {
+	return StrategyConfig{
+		EntryCondition:     2,     // 连赢2把进场
+		ExitCondition:      1,     // 连输1把离场
+		Hot3BetAmount:      100.0, // 热门3码默认100元
+		Balanced4BetAmount: 100.0, // 均衡4码默认100元
+		Hot3Enabled:        true,  // 默认启用热门3码
+		Balanced4Enabled:   true,  // 默认启用均衡4码
+	}
+}
 
 // StrategyState 策略状态
 type StrategyState struct {
@@ -55,23 +72,66 @@ type StrategyManager struct {
 	strategies map[string]*StrategyState
 	roundID    string
 	updatedAt  time.Time
-	startTime  time.Time // 系统启动时间
-	betAmount  float64   // 下注金额配置
+	startTime  time.Time      // 系统启动时间
+	config     StrategyConfig // 策略配置
 }
 
 // NewStrategyManager 创建策略管理器实例
-func NewStrategyManager(db *gorm.DB, betAmount float64) *StrategyManager {
-	if betAmount <= 0 {
-		betAmount = 100 // 默认100元
-	}
+func NewStrategyManager(db *gorm.DB) *StrategyManager {
 	now := time.Now()
 	return &StrategyManager{
 		db:         db,
 		strategies: make(map[string]*StrategyState),
 		updatedAt:  now,
-		startTime:  now, // 记录启动时间
-		betAmount:  betAmount,
+		startTime:  now,                    // 记录启动时间
+		config:     DefaultStrategyConfig(), // 使用默认配置
 	}
+}
+
+// getStrategyBetAmount 根据策略名称获取下注金额
+func (m *StrategyManager) getStrategyBetAmount(strategyName string) float64 {
+	if strategyName == "热门3码" {
+		return m.config.Hot3BetAmount
+	}
+	return m.config.Balanced4BetAmount
+}
+
+// GetConfig 获取当前配置（读锁）
+func (m *StrategyManager) GetConfig() StrategyConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.config
+}
+
+// UpdateConfig 更新配置（写锁，支持部分更新）
+func (m *StrategyManager) UpdateConfig(newConfig StrategyConfig) StrategyConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// 只更新非零值字段（支持部分更新）
+	if newConfig.EntryCondition > 0 {
+		m.config.EntryCondition = newConfig.EntryCondition
+	}
+	if newConfig.ExitCondition > 0 {
+		m.config.ExitCondition = newConfig.ExitCondition
+	}
+	if newConfig.Hot3BetAmount > 0 {
+		m.config.Hot3BetAmount = newConfig.Hot3BetAmount
+	}
+	if newConfig.Balanced4BetAmount > 0 {
+		m.config.Balanced4BetAmount = newConfig.Balanced4BetAmount
+	}
+
+	// 布尔值需要特殊处理（总是更新）
+	m.config.Hot3Enabled = newConfig.Hot3Enabled
+	m.config.Balanced4Enabled = newConfig.Balanced4Enabled
+
+	log.Printf("📝 配置已更新: 进场条件=%d, 离场条件=%d, 热门3码金额=%.2f, 均衡4码金额=%.2f, 热门3码启用=%v, 均衡4码启用=%v",
+		m.config.EntryCondition, m.config.ExitCondition,
+		m.config.Hot3BetAmount, m.config.Balanced4BetAmount,
+		m.config.Hot3Enabled, m.config.Balanced4Enabled)
+
+	return m.config
 }
 
 // UpdatePredictions 更新策略预测（写锁）
@@ -129,16 +189,19 @@ func (m *StrategyManager) SettleRound(roundID string, winners []string, specialR
 		// 判断是否命中：预测中是否有获胜车型
 		hitWinner := m.checkWin(predictions, winners)
 
+		// 获取该策略的单注金额
+		unitBetAmount := m.getStrategyBetAmount(state.Name)
+
 		// 记录本期盈亏（在状态更新前）
 		profit := 0.0
 		statusBeforeUpdate := state.Status
-		betAmount := float64(len(predictions)) * m.betAmount
+		betAmount := float64(len(predictions)) * unitBetAmount
 
 		// 计算盈利（虚盘和实盘都需要计算，用于判定胜负）
 		var won bool
 		if hitWinner {
 			// 计算真实盈利：(命中车型赔率 - 1) * 单注金额 - (未命中车型数量 * 单注金额)
-			profit = m.calculateProfit(predictions, winners)
+			profit = m.calculateProfit(predictions, winners, unitBetAmount)
 			// 只有盈利 > 0 才算真正的赢，打平也算输
 			won = profit > 0
 		} else {
@@ -193,7 +256,8 @@ func (m *StrategyManager) SettleRound(roundID string, winners []string, specialR
 
 // calculateProfit 计算真实盈利
 // 支持多个命中：下注多个车型，可能命中多个
-func (m *StrategyManager) calculateProfit(predictions []string, winners []string) float64 {
+// betAmount: 单注金额
+func (m *StrategyManager) calculateProfit(predictions []string, winners []string, betAmount float64) float64 {
 	// 创建获胜车型集合
 	winnerSet := make(map[string]bool)
 	for _, w := range winners {
@@ -213,7 +277,7 @@ func (m *StrategyManager) calculateProfit(predictions []string, winners []string
 
 	if len(hitCars) == 0 {
 		// 没有命中，理论上不应该到这里
-		return -float64(len(predictions)) * m.betAmount
+		return -float64(len(predictions)) * betAmount
 	}
 
 	// 计算所有命中车型的盈利
@@ -226,11 +290,11 @@ func (m *StrategyManager) calculateProfit(predictions []string, winners []string
 			odds = 10
 		}
 		// 每个命中车型的盈利 = (赔率 - 1) * 单注金额
-		totalWinAmount += float64(odds-1) * m.betAmount
+		totalWinAmount += float64(odds-1) * betAmount
 	}
 
 	// 计算未命中车型的损失
-	loseAmount := float64(missCount) * m.betAmount
+	loseAmount := float64(missCount) * betAmount
 
 	// 总盈利 = 所有命中车型的盈利之和 - 未命中车型的损失
 	profit := totalWinAmount - loseAmount
@@ -264,10 +328,10 @@ func (m *StrategyManager) updateStatus(state *StrategyState, won bool, profit fl
 		if won {
 			// 赢了：连赢次数加1
 			state.VirtualStreak++
-			log.Printf("🎉 [%s] 虚盘赢 | 连赢: %d/%d", state.Name, state.VirtualStreak, EntryCondition)
+			log.Printf("🎉 [%s] 虚盘赢 | 连赢: %d/%d", state.Name, state.VirtualStreak, m.config.EntryCondition)
 
 			// 判断进场：达到进场条件
-			if state.VirtualStreak >= EntryCondition {
+			if state.VirtualStreak >= m.config.EntryCondition {
 				state.Status = StatusReal
 				log.Printf("🚀 [%s] 表现优异，切换至实盘模式！", state.Name)
 			}
@@ -287,7 +351,8 @@ func (m *StrategyManager) updateStatus(state *StrategyState, won bool, profit fl
 			state.RealProfit += profit
 			log.Printf("⚠️ [%s] 实盘输 %.2f | 累计盈利: %.2f", state.Name, profit, state.RealProfit)
 
-			// 触发止损：切换回虚盘
+			// 触发止损：切换回虚盘（连输达到离场条件）
+			// 注：当前实现是连输1把即离场，可根据 ExitCondition 配置扩展
 			state.Status = StatusVirtual
 			state.VirtualStreak = 0
 			log.Printf("🛑 [%s] 实盘止损，退回观望模式", state.Name)
@@ -356,6 +421,63 @@ func (m *StrategyManager) GetRealPredictions() []StrategyResult {
 	}
 
 	return results
+}
+
+// NextPredictionItem 下一期预测项
+type NextPredictionItem struct {
+	Name        string   `json:"name"`        // 策略名称
+	Predictions []string `json:"predictions"` // 预测内容
+	BetAmount   float64  `json:"bet_amount"`  // 下注金额
+}
+
+// NextPredictionResult 下一期预测结果
+type NextPredictionResult struct {
+	Round      string               `json:"round"`      // 下一期期号
+	Strategies []NextPredictionItem `json:"strategies"` // 启用的策略列表
+}
+
+// GetNextPrediction 获取下一期预测（只返回启用的策略）
+func (m *StrategyManager) GetNextPrediction() NextPredictionResult {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	strategies := make([]NextPredictionItem, 0)
+
+	// 遍历所有策略
+	for _, state := range m.strategies {
+		// 检查是否启用
+		enabled := false
+		betAmount := 0.0
+
+		if state.Name == "热门3码" && m.config.Hot3Enabled {
+			enabled = true
+			betAmount = m.config.Hot3BetAmount
+		} else if state.Name == "均衡4码" && m.config.Balanced4Enabled {
+			enabled = true
+			betAmount = m.config.Balanced4BetAmount
+		}
+
+		if enabled && len(state.Predictions) > 0 {
+			strategies = append(strategies, NextPredictionItem{
+				Name:        state.Name,
+				Predictions: state.Predictions,
+				BetAmount:   betAmount,
+			})
+		}
+	}
+
+	// 计算下一期期号
+	nextRound := ""
+	if m.roundID != "" {
+		if num, err := strconv.Atoi(m.roundID); err == nil {
+			nextRound = strconv.Itoa(num + 1)
+		}
+	}
+
+	return NextPredictionResult{
+		Round:      nextRound,
+		Strategies: strategies,
+	}
 }
 
 // HistoryQueryParams 历史记录查询参数

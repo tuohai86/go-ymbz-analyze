@@ -27,8 +27,8 @@ func main() {
 	}
 	defer database.Close()
 	
-	// 创建策略管理器（虚实盘系统，默认下注金额100元）
-	manager := engine.NewStrategyManager(database.GetDB(), 100)
+	// 创建策略管理器（虚实盘系统，使用默认配置）
+	manager := engine.NewStrategyManager(database.GetDB())
 	
 	// 创建并启动分析引擎（后台单goroutine）
 	eng := engine.New(database.GetDB(), manager)

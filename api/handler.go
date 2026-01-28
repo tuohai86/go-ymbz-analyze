@@ -208,6 +208,88 @@ func (h *Handler) GetReport(c *gin.Context) {
 	})
 }
 
+// GetConfig 获取当前配置
+func (h *Handler) GetConfig(c *gin.Context) {
+	config := h.manager.GetConfig()
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"config":  config,
+	})
+}
+
+// UpdateConfigRequest 更新配置请求
+type UpdateConfigRequest struct {
+	EntryCondition     *int     `json:"entry_condition"`      // 连赢几把进场
+	ExitCondition      *int     `json:"exit_condition"`       // 连输几把离场
+	Hot3BetAmount      *float64 `json:"hot3_bet_amount"`      // 热门3码下注金额
+	Balanced4BetAmount *float64 `json:"balanced4_bet_amount"` // 均衡4码下注金额
+	Hot3Enabled        *bool    `json:"hot3_enabled"`         // 热门3码启用
+	Balanced4Enabled   *bool    `json:"balanced4_enabled"`    // 均衡4码启用
+}
+
+// UpdateConfig 更新配置
+func (h *Handler) UpdateConfig(c *gin.Context) {
+	var req UpdateConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 获取当前配置
+	currentConfig := h.manager.GetConfig()
+
+	// 构建新配置（支持部分更新）
+	newConfig := engine.StrategyConfig{
+		EntryCondition:     currentConfig.EntryCondition,
+		ExitCondition:      currentConfig.ExitCondition,
+		Hot3BetAmount:      currentConfig.Hot3BetAmount,
+		Balanced4BetAmount: currentConfig.Balanced4BetAmount,
+		Hot3Enabled:        currentConfig.Hot3Enabled,
+		Balanced4Enabled:   currentConfig.Balanced4Enabled,
+	}
+
+	// 更新提供的字段
+	if req.EntryCondition != nil && *req.EntryCondition > 0 {
+		newConfig.EntryCondition = *req.EntryCondition
+	}
+	if req.ExitCondition != nil && *req.ExitCondition > 0 {
+		newConfig.ExitCondition = *req.ExitCondition
+	}
+	if req.Hot3BetAmount != nil && *req.Hot3BetAmount > 0 {
+		newConfig.Hot3BetAmount = *req.Hot3BetAmount
+	}
+	if req.Balanced4BetAmount != nil && *req.Balanced4BetAmount > 0 {
+		newConfig.Balanced4BetAmount = *req.Balanced4BetAmount
+	}
+	if req.Hot3Enabled != nil {
+		newConfig.Hot3Enabled = *req.Hot3Enabled
+	}
+	if req.Balanced4Enabled != nil {
+		newConfig.Balanced4Enabled = *req.Balanced4Enabled
+	}
+
+	// 更新配置
+	updatedConfig := h.manager.UpdateConfig(newConfig)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "配置已更新",
+		"config":  updatedConfig,
+	})
+}
+
+// GetNextPrediction 获取下一期预测（基于启用状态过滤）
+func (h *Handler) GetNextPrediction(c *gin.Context) {
+	result := h.manager.GetNextPrediction()
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    result,
+	})
+}
+
 // SetupRoutes 设置路由
 func (h *Handler) SetupRoutes(router *gin.Engine) {
 	api := router.Group("/api")
@@ -216,6 +298,9 @@ func (h *Handler) SetupRoutes(router *gin.Engine) {
 		api.GET("/predictions", h.GetPredictions)
 		api.GET("/history", h.GetHistory)
 		api.POST("/history/clear", h.ClearHistory)
-		api.GET("/report", h.GetReport) // 新增财务报表接口
+		api.GET("/report", h.GetReport)
+		api.GET("/config", h.GetConfig)           // 获取配置
+		api.POST("/config", h.UpdateConfig)       // 更新配置
+		api.GET("/next-prediction", h.GetNextPrediction) // 获取下一期预测
 	}
 }
