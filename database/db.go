@@ -76,11 +76,18 @@ func AutoMigrate(db *gorm.DB) error {
 		log.Println("  ✓ bet_distribution 表已存在")
 	}
 	
+	if !db.Migrator().HasTable(&models.StrategyHistory{}) {
+		log.Println("  📝 创建 strategy_history 表...")
+	} else {
+		log.Println("  ✓ strategy_history 表已存在")
+	}
+	
 	// 执行自动迁移（仅游戏相关表）
 	err := db.AutoMigrate(
 		&models.GameRound{},
 		&models.GameWinner{},
 		&models.BetDistribution{},
+		&models.StrategyHistory{},
 	)
 	
 	if err != nil {
@@ -92,7 +99,7 @@ func AutoMigrate(db *gorm.DB) error {
 	log.Println("  - game_rounds 表: 游戏期数")
 	log.Println("  - game_winners 表: 获胜项")
 	log.Println("  - bet_distribution 表: 投注分布")
-	log.Println("  注意: 新架构不再持久化策略状态，策略实时计算")
+	log.Println("  - strategy_history 表: 策略历史记录")
 	return nil
 }
 

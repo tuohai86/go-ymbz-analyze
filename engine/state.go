@@ -14,8 +14,12 @@ type State struct {
 
 // StrategyResult 策略结果
 type StrategyResult struct {
-	Name        string   `json:"name"`
-	Predictions []string `json:"predictions"`
+	Name          string   `json:"name"`
+	Predictions   []string `json:"predictions"`
+	Status        int      `json:"status"`          // 0=虚盘, 1=实盘
+	StatusText    string   `json:"status_text"`     // 状态文字
+	VirtualStreak int      `json:"virtual_streak"`  // 虚盘连赢次数
+	RealProfit    float64  `json:"real_profit"`     // 实盘累计盈利
 }
 
 // AtomicState 原子状态容器

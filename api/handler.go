@@ -2,6 +2,7 @@ package api
 
 import (
 	"benz-sniper/engine"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,12 +12,12 @@ import (
 
 // Handler API处理器
 type Handler struct {
-	state *engine.AtomicState
+	manager *engine.StrategyManager
 }
 
 // New 创建API处理器实例
-func New(state *engine.AtomicState) *Handler {
-	return &Handler{state: state}
+func New(manager *engine.StrategyManager) *Handler {
+	return &Handler{manager: manager}
 }
 
 // StatusResponse 状态响应
@@ -29,10 +30,10 @@ type StatusResponse struct {
 	Strategies []engine.StrategyResult  `json:"strategies"`
 }
 
-// GetStatus 获取当前状态（无锁读取）
+// GetStatus 获取当前状态（读锁）
 func (h *Handler) GetStatus(c *gin.Context) {
-	// 直接读取，无锁
-	s := h.state.Get()
+	// 读取状态（自动加读锁）
+	s := h.manager.GetState()
 	
 	if s == nil {
 		c.JSON(http.StatusOK, StatusResponse{
@@ -77,10 +78,10 @@ type PredictionsResponse struct {
 	Predictions map[string]int `json:"predictions"`
 }
 
-// GetPredictions 获取预测（无锁读取）
+// GetPredictions 获取预测（读锁，只返回实盘策略）
 func (h *Handler) GetPredictions(c *gin.Context) {
-	// 直接读取，无锁
-	s := h.state.Get()
+	// 读取状态（自动加读锁）
+	s := h.manager.GetState()
 
 	if s == nil {
 		c.JSON(http.StatusOK, PredictionsResponse{
@@ -90,9 +91,12 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 		return
 	}
 
-	// 使用 map 去重所有策略的预测
+	// 只获取实盘策略的预测
+	realStrategies := h.manager.GetRealPredictions()
+
+	// 使用 map 去重所有实盘策略的预测
 	allItems := make(map[string]bool)
-	for _, strategy := range s.Strategies {
+	for _, strategy := range realStrategies {
 		for _, item := range strategy.Predictions {
 			allItems[item] = true
 		}
@@ -118,11 +122,48 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 	})
 }
 
+// HistoryResponse 历史记录响应
+type HistoryResponse struct {
+	Records []engine.HistoryRecord `json:"records"`
+	Total   int                    `json:"total"`
+}
+
+// GetHistory 获取历史记录（读锁）
+func (h *Handler) GetHistory(c *gin.Context) {
+	// 获取查询参数
+	limitStr := c.DefaultQuery("limit", "50")
+	limit := 50
+	if _, err := fmt.Sscanf(limitStr, "%d", &limit); err == nil {
+		if limit > 100 {
+			limit = 100
+		}
+	}
+
+	// 读取历史记录
+	records := h.manager.GetHistory(limit)
+
+	c.JSON(http.StatusOK, HistoryResponse{
+		Records: records,
+		Total:   len(records),
+	})
+}
+
+// ClearHistory 清空历史记录（写锁）
+func (h *Handler) ClearHistory(c *gin.Context) {
+	h.manager.ClearHistory()
+	c.JSON(http.StatusOK, gin.H{
+		"message": "历史记录已清空",
+		"success": true,
+	})
+}
+
 // SetupRoutes 设置路由
 func (h *Handler) SetupRoutes(router *gin.Engine) {
 	api := router.Group("/api")
 	{
 		api.GET("/status", h.GetStatus)
 		api.GET("/predictions", h.GetPredictions)
+		api.GET("/history", h.GetHistory)
+		api.POST("/history/clear", h.ClearHistory)
 	}
 }

@@ -27,11 +27,11 @@ func main() {
 	}
 	defer database.Close()
 	
-	// 创建原子状态容器
-	state := &engine.AtomicState{}
+	// 创建策略管理器（虚实盘系统，默认下注金额100元）
+	manager := engine.NewStrategyManager(database.GetDB(), 100)
 	
 	// 创建并启动分析引擎（后台单goroutine）
-	eng := engine.New(database.GetDB(), state)
+	eng := engine.New(database.GetDB(), manager)
 	go eng.Run()
 	
 	// 设置 Gin 模式
@@ -45,8 +45,8 @@ func main() {
 	// 启用 CORS
 	router.Use(corsMiddleware())
 	
-	// 设置 API 路由（无锁读取）
-	apiHandler := api.New(state)
+	// 设置 API 路由（读写锁保护）
+	apiHandler := api.New(manager)
 	apiHandler.SetupRoutes(router)
 	
 	// 静态文件服务
@@ -69,7 +69,7 @@ func main() {
 	// 启动服务器
 	go func() {
 		log.Printf("📱 狙击手地址: http://%s:%s", ip, port)
-		log.Printf("🚀 服务器启动在端口: %s (无锁模式)", port)
+		log.Printf("🚀 服务器启动在端口: %s (虚实盘模式)", port)
 		
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("❌ 服务器启动失败: %v", err)
