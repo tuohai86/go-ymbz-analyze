@@ -49,20 +49,30 @@ type StrategyState struct {
 	RoundPredictions  map[string][]string // 每期的预测（期号 -> 预测列表）
 }
 
+// UserBetRecord 用户派彩记录（API 使用）
+type UserBetRecord struct {
+	RoundID      string  `json:"round_id"`      // 期号
+	UserAccount  string  `json:"user_account"`  // 用户账号
+	BetAmount    float64 `json:"bet_amount"`    // 下注金额
+	PayoutAmount float64 `json:"payout_amount"` // 派彩金额
+	Balance      float64 `json:"balance"`       // 剩余余额
+}
+
 // HistoryRecord 历史记录
 type HistoryRecord struct {
-	RoundID       string    `json:"round_id"`       // 期号
-	Strategy      string    `json:"strategy"`       // 策略名称
-	Status        int       `json:"status"`         // 状态：0=虚盘, 1=实盘
-	StatusText    string    `json:"status_text"`    // 状态文字
-	Predictions   []string  `json:"predictions"`    // 预测内容
-	Winners       []string  `json:"winners"`        // 获胜车型
-	SpecialReward string    `json:"special_reward"` // 特殊奖项
-	Result        string    `json:"result"`         // 结果：赢/输
-	BetAmount     float64   `json:"bet_amount"`     // 下注金额
-	Profit        float64   `json:"profit"`         // 本期盈亏
-	TotalProfit   float64   `json:"total_profit"`   // 累计盈利
-	Timestamp     time.Time `json:"timestamp"`      // 时间戳
+	RoundID       string          `json:"round_id"`       // 期号
+	Strategy      string          `json:"strategy"`       // 策略名称
+	Status        int             `json:"status"`         // 状态：0=虚盘, 1=实盘
+	StatusText    string          `json:"status_text"`    // 状态文字
+	Predictions   []string        `json:"predictions"`    // 预测内容
+	Winners       []string        `json:"winners"`        // 获胜车型
+	SpecialReward string          `json:"special_reward"` // 特殊奖项
+	Result        string          `json:"result"`         // 结果：赢/输
+	BetAmount     float64         `json:"bet_amount"`     // 下注金额
+	Profit        float64         `json:"profit"`         // 本期盈亏
+	TotalProfit   float64         `json:"total_profit"`   // 累计盈利
+	Timestamp     time.Time       `json:"timestamp"`      // 时间戳
+	UserBets      []UserBetRecord `json:"user_bets"`      // 用户派彩记录
 }
 
 // StrategyManager 策略管理器（带读写锁）
@@ -622,6 +632,32 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 		}
 	}
 
+	// 收集所有期号，用于查询用户派彩记录
+	roundIDs := make([]string, 0, len(dbRecords))
+	for _, dbRecord := range dbRecords {
+		roundIDs = append(roundIDs, dbRecord.RoundID)
+	}
+
+	// 查询用户派彩记录
+	userBetsMap := make(map[string][]UserBetRecord)
+	if len(roundIDs) > 0 {
+		var userBets []models.UserBet
+		if err := m.db.Where("round_id IN ?", roundIDs).Find(&userBets).Error; err != nil {
+			log.Printf("⚠️ 查询用户派彩记录失败: %v", err)
+		} else {
+			// 按期号分组
+			for _, ub := range userBets {
+				userBetsMap[ub.RoundID] = append(userBetsMap[ub.RoundID], UserBetRecord{
+					RoundID:      ub.RoundID,
+					UserAccount:  ub.UserAccount,
+					BetAmount:    ub.BetAmount,
+					PayoutAmount: ub.PayoutAmount,
+					Balance:      ub.Balance,
+				})
+			}
+		}
+	}
+
 	// 转换为 HistoryRecord 格式
 	records := make([]HistoryRecord, 0, len(dbRecords))
 	for _, dbRecord := range dbRecords {
@@ -640,6 +676,12 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 			timestamp = *dbRecord.CreatedAt
 		}
 
+		// 获取该期号的用户派彩记录
+		userBets := userBetsMap[dbRecord.RoundID]
+		if userBets == nil {
+			userBets = []UserBetRecord{}
+		}
+
 		records = append(records, HistoryRecord{
 			RoundID:       dbRecord.RoundID,
 			Strategy:      dbRecord.Strategy,
@@ -653,6 +695,7 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 			Profit:        dbRecord.Profit,
 			TotalProfit:   dbRecord.TotalProfit,
 			Timestamp:     timestamp,
+			UserBets:      userBets,
 		})
 	}
 
@@ -673,6 +716,26 @@ func (m *StrategyManager) ClearHistory() {
 	} else {
 		log.Println("📝 历史记录已清空")
 	}
+}
+
+// SaveUserBet 保存用户派彩记录
+func (m *StrategyManager) SaveUserBet(record UserBetRecord) error {
+	userBet := models.UserBet{
+		RoundID:      record.RoundID,
+		UserAccount:  record.UserAccount,
+		BetAmount:    record.BetAmount,
+		PayoutAmount: record.PayoutAmount,
+		Balance:      record.Balance,
+	}
+
+	if err := m.db.Create(&userBet).Error; err != nil {
+		log.Printf("❌ 保存用户派彩记录失败: %v", err)
+		return err
+	}
+
+	log.Printf("✅ 用户派彩记录已保存: 期号=%s, 用户=%s, 下注=%.2f, 派彩=%.2f",
+		record.RoundID, record.UserAccount, record.BetAmount, record.PayoutAmount)
+	return nil
 }
 
 // GetTotalRealProfit 计算所有实盘注单的总盈利（从数据库）

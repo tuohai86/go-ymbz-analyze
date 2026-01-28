@@ -290,6 +290,49 @@ func (h *Handler) GetNextPrediction(c *gin.Context) {
 	})
 }
 
+// UploadUserBetRequest 上传用户派彩请求
+type UploadUserBetRequest struct {
+	RoundID      string  `json:"round_id" binding:"required"`      // 期号
+	UserAccount  string  `json:"user_account" binding:"required"`  // 用户账号
+	BetAmount    float64 `json:"bet_amount" binding:"required"`    // 下注金额
+	PayoutAmount float64 `json:"payout_amount"`                    // 派彩金额
+	Balance      float64 `json:"balance"`                          // 剩余余额
+}
+
+// UploadUserBet 上传用户派彩记录
+func (h *Handler) UploadUserBet(c *gin.Context) {
+	var req UploadUserBetRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "请求参数错误: " + err.Error(),
+		})
+		return
+	}
+
+	// 保存用户派彩记录
+	err := h.manager.SaveUserBet(engine.UserBetRecord{
+		RoundID:      req.RoundID,
+		UserAccount:  req.UserAccount,
+		BetAmount:    req.BetAmount,
+		PayoutAmount: req.PayoutAmount,
+		Balance:      req.Balance,
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"success": false,
+			"message": "保存失败: " + err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "用户派彩记录已保存",
+	})
+}
+
 // SetupRoutes 设置路由
 func (h *Handler) SetupRoutes(router *gin.Engine) {
 	api := router.Group("/api")
@@ -302,5 +345,6 @@ func (h *Handler) SetupRoutes(router *gin.Engine) {
 		api.GET("/config", h.GetConfig)           // 获取配置
 		api.POST("/config", h.UpdateConfig)       // 更新配置
 		api.GET("/next-prediction", h.GetNextPrediction) // 获取下一期预测
+		api.POST("/user-bets", h.UploadUserBet)   // 上传用户派彩记录
 	}
 }

@@ -455,6 +455,9 @@
                                     <th
                                         class="text-left py-4 px-6 text-slate-400 font-heading text-xs uppercase tracking-wider w-40">
                                         开奖结果</th>
+                                    <th
+                                        class="text-left py-4 px-6 text-slate-400 font-heading text-xs uppercase tracking-wider w-48 border-l border-slate-700/50">
+                                        用户下注</th>
                                     <!-- 策略列 -->
                                     <template v-for="strategyName in strategyNames" :key="strategyName">
                                         <th
@@ -466,7 +469,7 @@
                             </thead>
                             <tbody>
                                 <tr v-if="groupedHistory.length === 0">
-                                    <td :colspan="2 + strategyNames.length" class="text-center py-12">
+                                    <td :colspan="3 + strategyNames.length" class="text-center py-12">
                                         <div class="flex flex-col items-center space-y-3">
                                             <div
                                                 class="w-12 h-12 rounded-full bg-slate-800 flex items-center justify-center">
@@ -506,6 +509,30 @@
                                                 </span>
                                             </div>
                                         </div>
+                                    </td>
+                                    <!-- 用户下注 -->
+                                    <td class="py-4 px-6 w-48 border-l border-slate-700/50">
+                                        <div v-if="group.user_bets && group.user_bets.length > 0" class="flex flex-col gap-2">
+                                            <div v-for="(bet, idx) in group.user_bets" :key="idx" 
+                                                class="p-2 rounded-lg bg-slate-800/50 border border-slate-700/30 text-xs">
+                                                <div class="font-bold text-primary-400 mb-1">{{ bet.user_account }}</div>
+                                                <div class="flex justify-between text-slate-400">
+                                                    <span>下注:</span>
+                                                    <span class="text-slate-300">{{ bet.bet_amount.toFixed(2) }}</span>
+                                                </div>
+                                                <div class="flex justify-between text-slate-400">
+                                                    <span>派彩:</span>
+                                                    <span :class="bet.payout_amount > 0 ? 'text-success-400' : 'text-slate-300'">
+                                                        {{ bet.payout_amount.toFixed(2) }}
+                                                    </span>
+                                                </div>
+                                                <div class="flex justify-between text-slate-400">
+                                                    <span>余额:</span>
+                                                    <span class="text-slate-300">{{ bet.balance.toFixed(2) }}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <span v-else class="text-slate-600 text-sm">-</span>
                                     </td>
 
                                     <!-- 策略结果 (简化显示) -->
@@ -977,8 +1004,13 @@
                                 round_id: record.round_id,
                                 winners: record.winners,
                                 special_reward: record.special_reward,
+                                user_bets: record.user_bets || [],
                                 strategies: {}
                             };
+                        }
+                        // 合并用户下注记录（同一期号的记录可能来自不同策略，但user_bets应该相同）
+                        if (record.user_bets && record.user_bets.length > 0 && grouped[record.round_id].user_bets.length === 0) {
+                            grouped[record.round_id].user_bets = record.user_bets;
                         }
                         grouped[record.round_id].strategies[record.strategy] = record;
                     });

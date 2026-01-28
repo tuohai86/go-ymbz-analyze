@@ -62,6 +62,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&models.BetDistribution{},
 		&models.StrategyHistory{},
 		&models.SystemConfig{},
+		&models.UserBet{},
 	)
 	
 	if err != nil {

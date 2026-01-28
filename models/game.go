@@ -69,6 +69,21 @@ func (StrategyHistory) TableName() string {
 	return "strategy_history"
 }
 
+// UserBet 用户派彩记录表
+type UserBet struct {
+	ID           uint       `gorm:"primaryKey" json:"id"`
+	RoundID      string     `gorm:"column:round_id;type:varchar(50);index" json:"round_id"`     // 期号
+	UserAccount  string     `gorm:"column:user_account;type:varchar(100)" json:"user_account"` // 用户账号
+	BetAmount    float64    `gorm:"column:bet_amount" json:"bet_amount"`                       // 下注金额
+	PayoutAmount float64    `gorm:"column:payout_amount" json:"payout_amount"`                 // 派彩金额
+	Balance      float64    `gorm:"column:balance" json:"balance"`                             // 剩余余额
+	CreatedAt    *time.Time `gorm:"column:created_at" json:"created_at"`
+}
+
+func (UserBet) TableName() string {
+	return "user_bets"
+}
+
 // SystemConfig 系统配置表（单行存储）
 type SystemConfig struct {
 	ID                 uint       `gorm:"primaryKey" json:"id"`
