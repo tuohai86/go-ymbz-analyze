@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -49,9 +50,29 @@ func main() {
 	apiHandler := api.New(manager)
 	apiHandler.SetupRoutes(router)
 	
-	// 静态文件服务
-	router.StaticFile("/", "./index.html")
-	router.Static("/assets", "./assets")
+	// 获取可执行文件所在目录
+	execPath, err := os.Executable()
+	if err != nil {
+		log.Fatalf("❌ 获取执行路径失败: %v", err)
+	}
+	execDir := filepath.Dir(execPath)
+	
+	// 静态文件服务（使用绝对路径）
+	indexPath := filepath.Join(execDir, "index.html")
+	assetsPath := filepath.Join(execDir, "assets")
+	
+	// 检查文件是否存在
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		log.Printf("⚠️  警告: index.html 未找到于 %s，尝试使用当前目录", indexPath)
+		indexPath = "index.html"
+	}
+	if _, err := os.Stat(assetsPath); os.IsNotExist(err) {
+		log.Printf("⚠️  警告: assets 目录未找到于 %s，尝试使用当前目录", assetsPath)
+		assetsPath = "assets"
+	}
+	
+	router.StaticFile("/", indexPath)
+	router.Static("/assets", assetsPath)
 	
 	// 获取本机IP地址
 	ip := getLocalIP()
