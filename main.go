@@ -6,17 +6,24 @@ import (
 	"benz-sniper/database"
 	"benz-sniper/engine"
 	"context"
+	"embed"
+	"io/fs"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
+
+//go:embed index.html
+var indexHTML embed.FS
+
+//go:embed assets
+var assetsFS embed.FS
 
 func main() {
 	// 加载配置
@@ -50,29 +57,24 @@ func main() {
 	apiHandler := api.New(manager)
 	apiHandler.SetupRoutes(router)
 	
-	// 获取可执行文件所在目录
-	execPath, err := os.Executable()
+	// 使用嵌入的静态文件（支持 CI/CD 部署）
+	// 首页
+	router.GET("/", func(c *gin.Context) {
+		data, err := indexHTML.ReadFile("index.html")
+		if err != nil {
+			log.Printf("❌ 读取 index.html 失败: %v", err)
+			c.String(http.StatusInternalServerError, "页面加载失败")
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", data)
+	})
+	
+	// 静态资源目录
+	assetsSubFS, err := fs.Sub(assetsFS, "assets")
 	if err != nil {
-		log.Fatalf("❌ 获取执行路径失败: %v", err)
+		log.Fatalf("❌ 加载静态资源失败: %v", err)
 	}
-	execDir := filepath.Dir(execPath)
-	
-	// 静态文件服务（使用绝对路径）
-	indexPath := filepath.Join(execDir, "index.html")
-	assetsPath := filepath.Join(execDir, "assets")
-	
-	// 检查文件是否存在
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		log.Printf("⚠️  警告: index.html 未找到于 %s，尝试使用当前目录", indexPath)
-		indexPath = "index.html"
-	}
-	if _, err := os.Stat(assetsPath); os.IsNotExist(err) {
-		log.Printf("⚠️  警告: assets 目录未找到于 %s，尝试使用当前目录", assetsPath)
-		assetsPath = "assets"
-	}
-	
-	router.StaticFile("/", indexPath)
-	router.Static("/assets", assetsPath)
+	router.StaticFS("/assets", http.FS(assetsSubFS))
 	
 	// 获取本机IP地址
 	ip := getLocalIP()

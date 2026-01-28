@@ -1,5 +1,9 @@
 # 部署指南
 
+## 重要说明
+
+本项目使用 Go embed 功能将静态文件（index.html 和 assets）嵌入到二进制文件中，**无需额外复制静态文件**，非常适合 Zeabur、Docker、CI/CD 等自动化部署环境。
+
 ## 开发环境部署
 
 ### 1. 准备工作
@@ -54,8 +58,11 @@ make run
 ### 方案一：直接编译运行
 
 ```bash
-# 编译
+# 编译（静态文件会自动嵌入）
 go build -o benz-sniper main.go
+
+# ⚠️ 注意：编译后的二进制文件已包含所有静态资源
+# 无需复制 index.html 或 assets 目录
 
 # 创建系统服务 (Linux)
 sudo vim /etc/systemd/system/benz-sniper.service
@@ -110,8 +117,8 @@ RUN go build -o benz-sniper main.go
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /root/
+# 只需复制二进制文件，静态资源已嵌入
 COPY --from=builder /app/benz-sniper .
-COPY --from=builder /app/index.html .
 
 EXPOSE 8001
 CMD ["./benz-sniper"]
@@ -161,7 +168,39 @@ volumes:
 docker-compose up -d
 ```
 
-### 方案三：使用 Nginx 反向代理
+### 方案三：Zeabur 部署（推荐）
+
+Zeabur 会自动检测 Go 项目并构建，无需额外配置：
+
+1. **连接 Git 仓库**
+   - 将代码推送到 GitHub/GitLab
+   - 在 Zeabur 中连接仓库
+
+2. **配置环境变量**
+   ```
+   DB_HOST=your-database-host
+   DB_PORT=3306
+   DB_USER=your-username
+   DB_PASSWORD=your-password
+   DB_NAME=benz_analysis
+   SERVER_PORT=8080
+   ```
+
+3. **部署**
+   - Zeabur 会自动：
+     - 检测 Go 项目
+     - 运行 `go build`
+     - 将静态文件嵌入二进制
+     - 启动服务
+
+4. **优势**
+   - ✅ 自动 CI/CD
+   - ✅ 静态文件自动嵌入
+   - ✅ 无需 Dockerfile
+   - ✅ 自动扩展
+   - ✅ HTTPS 自动配置
+
+### 方案四：使用 Nginx 反向代理
 
 Nginx 配置示例：
 
@@ -247,8 +286,8 @@ docker-compose logs -f benz-sniper
 ### 应用备份
 
 ```bash
-# 备份可执行文件和配置
-tar -czf benz-sniper-backup.tar.gz benz-sniper .env index.html
+# 备份可执行文件和配置（静态文件已嵌入二进制）
+tar -czf benz-sniper-backup.tar.gz benz-sniper .env
 ```
 
 ## 故障排查
