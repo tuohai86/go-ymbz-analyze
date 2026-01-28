@@ -24,12 +24,12 @@ const (
 
 // StrategyState 策略状态
 type StrategyState struct {
-	Name           string   // 策略名称
-	Status         int      // 0=虚盘, 1=实盘
-	Predictions    []string // 当前预测
-	VirtualStreak  int      // 虚盘连赢次数
-	RealProfit     float64  // 实盘累计盈利
-	LastPrediction []string // 上期预测（用于结算）
+	Name              string              // 策略名称
+	Status            int                 // 0=虚盘, 1=实盘
+	Predictions       []string            // 当前预测
+	VirtualStreak     int                 // 虚盘连赢次数
+	RealProfit        float64             // 实盘累计盈利
+	RoundPredictions  map[string][]string // 每期的预测（期号 -> 预测列表）
 }
 
 // HistoryRecord 历史记录
@@ -55,7 +55,8 @@ type StrategyManager struct {
 	strategies map[string]*StrategyState
 	roundID    string
 	updatedAt  time.Time
-	betAmount  float64 // 下注金额配置
+	startTime  time.Time // 系统启动时间
+	betAmount  float64   // 下注金额配置
 }
 
 // NewStrategyManager 创建策略管理器实例
@@ -63,16 +64,21 @@ func NewStrategyManager(db *gorm.DB, betAmount float64) *StrategyManager {
 	if betAmount <= 0 {
 		betAmount = 100 // 默认100元
 	}
+	now := time.Now()
 	return &StrategyManager{
 		db:         db,
 		strategies: make(map[string]*StrategyState),
-		updatedAt:  time.Now(),
+		updatedAt:  now,
+		startTime:  now, // 记录启动时间
 		betAmount:  betAmount,
 	}
 }
 
 // UpdatePredictions 更新策略预测（写锁）
-func (m *StrategyManager) UpdatePredictions(roundID string, name string, predictions []string) {
+// currentRoundID: 当前已开奖的期号（比如06）
+// targetRoundID: 预测针对的期号（比如07）
+// predictions: 预测内容
+func (m *StrategyManager) UpdatePredictions(currentRoundID string, targetRoundID string, name string, predictions []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -80,50 +86,59 @@ func (m *StrategyManager) UpdatePredictions(roundID string, name string, predict
 	state, exists := m.strategies[name]
 	if !exists {
 		state = &StrategyState{
-			Name:          name,
-			Status:        StatusVirtual, // 初始为虚盘
-			VirtualStreak: 0,
-			RealProfit:    0.0,
+			Name:             name,
+			Status:           StatusVirtual, // 初始为虚盘
+			VirtualStreak:    0,
+			RealProfit:       0.0,
+			RoundPredictions: make(map[string][]string),
 		}
 		m.strategies[name] = state
 		log.Printf("🎯 初始化策略: %s (虚盘模式)", name)
 	}
 
-	// 保存上期预测用于结算
-	state.LastPrediction = state.Predictions
-	// 更新当前预测
+	// 将预测保存到【目标期号】的 key 中
+	// 例如：06期生成的预测是对07期的，所以存到 RoundPredictions["07"]
+	state.RoundPredictions[targetRoundID] = predictions
+	// 更新当前预测（用于显示）
 	state.Predictions = predictions
 
-	// 更新全局期号
-	m.roundID = roundID
+	// 更新全局期号（显示的是当前已开奖的期号）
+	m.roundID = currentRoundID
 	m.updatedAt = time.Now()
 }
 
 // SettleRound 结算上一期盈亏（写锁）
-func (m *StrategyManager) SettleRound(roundID string, winners []string, specialReward string) {
+// 返回值：是否有任何策略被结算
+func (m *StrategyManager) SettleRound(roundID string, winners []string, specialReward string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	settled := false
+
 	// 遍历所有策略进行结算
 	for _, state := range m.strategies {
-		// 只有当上期有预测时才需要结算
-		if len(state.LastPrediction) == 0 {
+		// 从 map 中获取该期号的预测
+		predictions, exists := state.RoundPredictions[roundID]
+		if !exists || len(predictions) == 0 {
+			// 如果该期号没有预测，跳过
 			continue
 		}
 
+		settled = true
+
 		// 判断是否命中：预测中是否有获胜车型
-		hitWinner := m.checkWin(state.LastPrediction, winners)
+		hitWinner := m.checkWin(predictions, winners)
 
 		// 记录本期盈亏（在状态更新前）
 		profit := 0.0
 		statusBeforeUpdate := state.Status
-		betAmount := float64(len(state.LastPrediction)) * m.betAmount
+		betAmount := float64(len(predictions)) * m.betAmount
 
 		// 计算盈利（虚盘和实盘都需要计算，用于判定胜负）
 		var won bool
 		if hitWinner {
 			// 计算真实盈利：(命中车型赔率 - 1) * 单注金额 - (未命中车型数量 * 单注金额)
-			profit = m.calculateProfit(state.LastPrediction, winners)
+			profit = m.calculateProfit(predictions, winners)
 			// 只有盈利 > 0 才算真正的赢，打平也算输
 			won = profit > 0
 		} else {
@@ -148,7 +163,7 @@ func (m *StrategyManager) SettleRound(roundID string, winners []string, specialR
 		}
 
 		// 序列化预测和获胜车型
-		predictionsJSON, _ := json.Marshal(state.LastPrediction)
+		predictionsJSON, _ := json.Marshal(predictions)
 		winnersJSON, _ := json.Marshal(winners)
 
 		history := models.StrategyHistory{
@@ -169,12 +184,15 @@ func (m *StrategyManager) SettleRound(roundID string, winners []string, specialR
 			log.Printf("❌ 保存历史记录失败: %v", err)
 		}
 
-		// 清空上期预测
-		state.LastPrediction = nil
+		// 从 map 中删除已结算的期号预测
+		delete(state.RoundPredictions, roundID)
 	}
+
+	return settled
 }
 
 // calculateProfit 计算真实盈利
+// 支持多个命中：下注多个车型，可能命中多个
 func (m *StrategyManager) calculateProfit(predictions []string, winners []string) float64 {
 	// 创建获胜车型集合
 	winnerSet := make(map[string]bool)
@@ -182,32 +200,43 @@ func (m *StrategyManager) calculateProfit(predictions []string, winners []string
 		winnerSet[w] = true
 	}
 
-	// 找出命中的车型
-	hitCar := ""
+	// 找出所有命中的车型
+	hitCars := make([]string, 0)
+	missCount := 0
 	for _, pred := range predictions {
 		if winnerSet[pred] {
-			hitCar = pred
-			break
+			hitCars = append(hitCars, pred)
+		} else {
+			missCount++
 		}
 	}
 
-	if hitCar == "" {
+	if len(hitCars) == 0 {
 		// 没有命中，理论上不应该到这里
 		return -float64(len(predictions)) * m.betAmount
 	}
 
-	// 获取赔率
-	odds, exists := REAL_ODDS[hitCar]
-	if !exists {
-		log.Printf("⚠️ 未找到车型 %s 的赔率，使用默认赔率10", hitCar)
-		odds = 10
+	// 计算所有命中车型的盈利
+	totalWinAmount := 0.0
+	for _, hitCar := range hitCars {
+		// 获取赔率
+		odds, exists := REAL_ODDS[hitCar]
+		if !exists {
+			log.Printf("⚠️ 未找到车型 %s 的赔率，使用默认赔率10", hitCar)
+			odds = 10
+		}
+		// 每个命中车型的盈利 = (赔率 - 1) * 单注金额
+		totalWinAmount += float64(odds-1) * m.betAmount
 	}
 
-	// 计算盈利
-	// 盈利 = (赔率 - 1) * 单注金额 - (未命中车型数量 * 单注金额)
-	winAmount := float64(odds-1) * m.betAmount
-	loseAmount := float64(len(predictions)-1) * m.betAmount
-	profit := winAmount - loseAmount
+	// 计算未命中车型的损失
+	loseAmount := float64(missCount) * m.betAmount
+
+	// 总盈利 = 所有命中车型的盈利之和 - 未命中车型的损失
+	profit := totalWinAmount - loseAmount
+
+	log.Printf("💵 盈利计算: 命中 %d 个 %v, 未命中 %d 个, 盈利=%.2f-%.2f=%.2f", 
+		len(hitCars), hitCars, missCount, totalWinAmount, loseAmount, profit)
 
 	return profit
 }
@@ -291,10 +320,14 @@ func (m *StrategyManager) GetState() *State {
 		})
 	}
 
+	// 计算系统运行时长（从启动到现在）
+	systemUptime := int(time.Since(m.startTime).Seconds())
+
 	return &State{
-		RoundID:    m.roundID,
-		UpdatedAt:  m.updatedAt,
-		Strategies: results,
+		RoundID:      m.roundID,
+		UpdatedAt:    m.updatedAt,
+		SystemUptime: systemUptime,
+		Strategies:   results,
 	}
 }
 
@@ -325,17 +358,76 @@ func (m *StrategyManager) GetRealPredictions() []StrategyResult {
 	return results
 }
 
-// GetHistory 获取历史记录（从数据库）
-func (m *StrategyManager) GetHistory(limit int) []HistoryRecord {
-	if limit <= 0 {
-		limit = 50
+// HistoryQueryParams 历史记录查询参数
+type HistoryQueryParams struct {
+	Page     int  // 页码（从1开始）
+	PageSize int  // 每页大小
+	RealOnly bool // 是否只查询实盘记录
+}
+
+// HistoryResult 历史记录查询结果
+type HistoryResult struct {
+	Records    []HistoryRecord // 记录列表
+	Total      int64           // 总记录数
+	TotalPages int             // 总页数
+	Page       int             // 当前页码
+	PageSize   int             // 每页大小
+}
+
+// GetHistory 获取历史记录（从数据库，支持分页和筛选）
+func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
+	// 参数验证
+	if params.Page <= 0 {
+		params.Page = 1
+	}
+	if params.PageSize <= 0 {
+		params.PageSize = 20
+	}
+	if params.PageSize > 100 {
+		params.PageSize = 100
 	}
 
+	// 构建查询
+	query := m.db.Model(&models.StrategyHistory{})
+	
+	// 筛选实盘记录
+	if params.RealOnly {
+		query = query.Where("status = ?", StatusReal)
+	}
+
+	// 查询总数
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		log.Printf("❌ 查询历史记录总数失败: %v", err)
+		return HistoryResult{
+			Records:    []HistoryRecord{},
+			Total:      0,
+			TotalPages: 0,
+			Page:       params.Page,
+			PageSize:   params.PageSize,
+		}
+	}
+
+	// 计算总页数
+	totalPages := int((total + int64(params.PageSize) - 1) / int64(params.PageSize))
+
+	// 分页查询
+	offset := (params.Page - 1) * params.PageSize
 	var dbRecords []models.StrategyHistory
-	err := m.db.Order("created_at DESC, id DESC").Limit(limit).Find(&dbRecords).Error
+	err := query.Order("created_at DESC, id DESC").
+		Limit(params.PageSize).
+		Offset(offset).
+		Find(&dbRecords).Error
+	
 	if err != nil {
 		log.Printf("❌ 查询历史记录失败: %v", err)
-		return []HistoryRecord{}
+		return HistoryResult{
+			Records:    []HistoryRecord{},
+			Total:      total,
+			TotalPages: totalPages,
+			Page:       params.Page,
+			PageSize:   params.PageSize,
+		}
 	}
 
 	// 转换为 HistoryRecord 格式
@@ -372,7 +464,13 @@ func (m *StrategyManager) GetHistory(limit int) []HistoryRecord {
 		})
 	}
 
-	return records
+	return HistoryResult{
+		Records:    records,
+		Total:      total,
+		TotalPages: totalPages,
+		Page:       params.Page,
+		PageSize:   params.PageSize,
+	}
 }
 
 // ClearHistory 清空历史记录（从数据库）
@@ -419,4 +517,162 @@ func (m *StrategyManager) GetStrategyRealProfit(strategyName string) float64 {
 	}
 	
 	return totalProfit
+}
+
+// ReportSummary 总体报表统计
+type ReportSummary struct {
+	TotalBets   int64   `json:"total_bets"`   // 总下单次数
+	TotalWins   int64   `json:"total_wins"`   // 总命中次数
+	WinRate     float64 `json:"win_rate"`     // 命中率
+	TotalProfit float64 `json:"total_profit"` // 总盈利
+}
+
+// DailyReportItem 每日报表统计
+type DailyReportItem struct {
+	Date        string  `json:"date"`         // 日期
+	TotalBets   int64   `json:"bets"`         // 下单次数
+	TotalWins   int64   `json:"wins"`         // 命中次数
+	WinRate     float64 `json:"win_rate"`     // 命中率
+	TotalProfit float64 `json:"profit"`       // 盈利
+}
+
+// StrategyReportItem 策略报表统计
+type StrategyReportItem struct {
+	Name               string   `json:"name"`                // 策略名称
+	TotalBets          int64    `json:"total_bets"`          // 实盘下单次数
+	TotalWins          int64    `json:"total_wins"`          // 实盘命中次数
+	WinRate            float64  `json:"win_rate"`            // 实盘命中率
+	TotalProfit        float64  `json:"total_profit"`        // 实盘总盈利
+	Status             int      `json:"status"`              // 当前状态
+	StatusText         string   `json:"status_text"`         // 状态描述
+	CurrentPredictions []string `json:"current_predictions"` // 当前推荐
+}
+
+// GetReportSummary 获取总体统计报表（只统计实盘）
+func (m *StrategyManager) GetReportSummary() ReportSummary {
+	var result ReportSummary
+	type Result struct {
+		Bets   int64
+		Wins   int64
+		Profit float64
+	}
+	var dbResult Result
+
+	// 统计实盘记录
+	// 命中次数定义：result='赢'
+	m.db.Model(&models.StrategyHistory{}).
+		Where("status = ?", StatusReal).
+		Select("COUNT(*) as bets, SUM(CASE WHEN result='赢' THEN 1 ELSE 0 END) as wins, COALESCE(SUM(profit), 0) as profit").
+		Scan(&dbResult)
+
+	result.TotalBets = dbResult.Bets
+	result.TotalWins = dbResult.Wins
+	result.TotalProfit = dbResult.Profit
+	if result.TotalBets > 0 {
+		result.WinRate = float64(result.TotalWins) / float64(result.TotalBets) * 100
+	}
+	return result
+}
+
+// GetDailyReport 获取每日统计报表（只统计实盘）
+func (m *StrategyManager) GetDailyReport() []DailyReportItem {
+	var results []DailyReportItem
+	
+	type DailyStat struct {
+		DateStr string  `gorm:"column:date"`
+		Bets    int64   `gorm:"column:bets"`
+		Wins    int64   `gorm:"column:wins"`
+		Profit  float64 `gorm:"column:profit"`
+	}
+	var stats []DailyStat
+
+	// 按日期分组统计实盘数据
+	// 使用 DATE_FORMAT 确保日期格式一致
+	err := m.db.Model(&models.StrategyHistory{}).
+		Where("status = ?", StatusReal).
+		Select("DATE_FORMAT(created_at, '%Y-%m-%d') as date, COUNT(*) as bets, SUM(CASE WHEN result='赢' THEN 1 ELSE 0 END) as wins, COALESCE(SUM(profit), 0) as profit").
+		Group("DATE_FORMAT(created_at, '%Y-%m-%d')").
+		Order("date DESC").
+		Scan(&stats).Error
+
+	if err != nil {
+		log.Printf("❌ 查询每日报表失败: %v", err)
+		return []DailyReportItem{}
+	}
+
+	for _, stat := range stats {
+		item := DailyReportItem{
+			Date:        stat.DateStr,
+			TotalBets:   stat.Bets,
+			TotalWins:   stat.Wins,
+			TotalProfit: stat.Profit,
+		}
+		if item.TotalBets > 0 {
+			item.WinRate = float64(item.TotalWins) / float64(item.TotalBets) * 100
+		}
+		results = append(results, item)
+	}
+
+	return results
+}
+
+// GetStrategyReport 获取策略统计报表
+func (m *StrategyManager) GetStrategyReport() []StrategyReportItem {
+	// 1. 获取数据库统计数据（只统计实盘）
+	type StatResult struct {
+		Strategy string  `gorm:"column:strategy"`
+		Bets     int64   `gorm:"column:bets"`
+		Wins     int64   `gorm:"column:wins"`
+		Profit   float64 `gorm:"column:profit"`
+	}
+	var stats []StatResult
+
+	m.db.Model(&models.StrategyHistory{}).
+		Where("status = ?", StatusReal).
+		Select("strategy, COUNT(*) as bets, SUM(CASE WHEN result='赢' THEN 1 ELSE 0 END) as wins, COALESCE(SUM(profit), 0) as profit").
+		Group("strategy").
+		Scan(&stats)
+
+	statsMap := make(map[string]StatResult)
+	for _, s := range stats {
+		statsMap[s.Strategy] = s
+	}
+
+	// 2. 结合内存中的当前状态
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var results []StrategyReportItem
+
+	// 遍历当前管理的所有策略
+	for name, state := range m.strategies {
+		stat := statsMap[name]
+
+		item := StrategyReportItem{
+			Name:               name,
+			TotalBets:          stat.Bets,
+			TotalWins:          stat.Wins,
+			TotalProfit:        stat.Profit,
+			Status:             state.Status,
+			CurrentPredictions: state.Predictions,
+		}
+
+		if item.TotalBets > 0 {
+			item.WinRate = float64(item.TotalWins) / float64(item.TotalBets) * 100
+		}
+
+		if state.Status == StatusReal {
+			item.StatusText = "实盘下注"
+		} else {
+			item.StatusText = "虚盘观望"
+		}
+
+		results = append(results, item)
+	}
+	
+	// 对结果进行排序，热门3码放前面
+	// 注意：这里需要自己实现简单的排序或直接依赖前端排序
+	// 为了简单起见，这里先不排序，让前端处理
+	
+	return results
 }

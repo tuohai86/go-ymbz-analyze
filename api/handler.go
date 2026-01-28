@@ -2,7 +2,6 @@ package api
 
 import (
 	"benz-sniper/engine"
-	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -50,8 +49,9 @@ func (h *Handler) GetStatus(c *gin.Context) {
 	}
 
 	// 计算时间相关
-	timePassed := int(time.Since(s.UpdatedAt).Seconds())
-	countdown := 34 - timePassed
+	timePassed := s.SystemUptime // 使用系统运行时长
+	roundTimePassed := int(time.Since(s.UpdatedAt).Seconds())
+	countdown := 24 - roundTimePassed // 减去10秒偏移量来同步实际游戏
 	if countdown < 0 {
 		countdown = 0
 	}
@@ -130,27 +130,52 @@ func (h *Handler) GetPredictions(c *gin.Context) {
 
 // HistoryResponse 历史记录响应
 type HistoryResponse struct {
-	Records []engine.HistoryRecord `json:"records"`
-	Total   int                    `json:"total"`
+	Records    []engine.HistoryRecord `json:"records"`
+	Total      int64                  `json:"total"`       // 总记录数
+	TotalPages int                    `json:"total_pages"` // 总页数
+	Page       int                    `json:"page"`        // 当前页码
+	PageSize   int                    `json:"page_size"`   // 每页大小
 }
 
-// GetHistory 获取历史记录（读锁）
+// GetHistory 获取历史记录（读锁，支持分页和筛选）
 func (h *Handler) GetHistory(c *gin.Context) {
 	// 获取查询参数
-	limitStr := c.DefaultQuery("limit", "50")
-	limit := 50
-	if _, err := fmt.Sscanf(limitStr, "%d", &limit); err == nil {
-		if limit > 100 {
-			limit = 100
+	page := 1
+	pageSize := 20
+	realOnly := false
+	
+	if pageStr := c.Query("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
 		}
+	}
+	
+	if pageSizeStr := c.Query("page_size"); pageSizeStr != "" {
+		if ps, err := strconv.Atoi(pageSizeStr); err == nil && ps > 0 {
+			pageSize = ps
+			if pageSize > 100 {
+				pageSize = 100
+			}
+		}
+	}
+	
+	if realOnlyStr := c.Query("real_only"); realOnlyStr == "true" || realOnlyStr == "1" {
+		realOnly = true
 	}
 
 	// 读取历史记录
-	records := h.manager.GetHistory(limit)
+	result := h.manager.GetHistory(engine.HistoryQueryParams{
+		Page:     page,
+		PageSize: pageSize,
+		RealOnly: realOnly,
+	})
 
 	c.JSON(http.StatusOK, HistoryResponse{
-		Records: records,
-		Total:   len(records),
+		Records:    result.Records,
+		Total:      result.Total,
+		TotalPages: result.TotalPages,
+		Page:       result.Page,
+		PageSize:   result.PageSize,
 	})
 }
 
@@ -163,6 +188,26 @@ func (h *Handler) ClearHistory(c *gin.Context) {
 	})
 }
 
+// ReportResponse 财务报表响应
+type ReportResponse struct {
+	Summary    engine.ReportSummary        `json:"summary"`
+	Daily      []engine.DailyReportItem    `json:"daily"`
+	Strategies []engine.StrategyReportItem `json:"strategies"`
+}
+
+// GetReport 获取财务报表
+func (h *Handler) GetReport(c *gin.Context) {
+	summary := h.manager.GetReportSummary()
+	daily := h.manager.GetDailyReport()
+	strategies := h.manager.GetStrategyReport()
+
+	c.JSON(http.StatusOK, ReportResponse{
+		Summary:    summary,
+		Daily:      daily,
+		Strategies: strategies,
+	})
+}
+
 // SetupRoutes 设置路由
 func (h *Handler) SetupRoutes(router *gin.Engine) {
 	api := router.Group("/api")
@@ -171,5 +216,6 @@ func (h *Handler) SetupRoutes(router *gin.Engine) {
 		api.GET("/predictions", h.GetPredictions)
 		api.GET("/history", h.GetHistory)
 		api.POST("/history/clear", h.ClearHistory)
+		api.GET("/report", h.GetReport) // 新增财务报表接口
 	}
 }

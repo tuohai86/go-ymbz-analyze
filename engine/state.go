@@ -7,9 +7,10 @@ import (
 
 // State 状态快照（不可变）
 type State struct {
-	RoundID    string           `json:"round_id"`
-	UpdatedAt  time.Time        `json:"updated_at"`
-	Strategies []StrategyResult `json:"strategies"`
+	RoundID       string           `json:"round_id"`
+	UpdatedAt     time.Time        `json:"updated_at"`
+	SystemUptime  int              `json:"system_uptime"` // 系统运行时长（秒）
+	Strategies    []StrategyResult `json:"strategies"`
 }
 
 // StrategyResult 策略结果

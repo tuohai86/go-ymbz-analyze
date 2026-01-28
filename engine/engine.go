@@ -2,6 +2,7 @@ package engine
 
 import (
 	"benz-sniper/models"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -11,15 +12,17 @@ import (
 
 // Engine 分析引擎
 type Engine struct {
-	db      *gorm.DB
-	manager *StrategyManager
+	db                *gorm.DB
+	manager           *StrategyManager
+	pendingSettlement []string // 待结算的期号列表
 }
 
 // New 创建引擎实例
 func New(db *gorm.DB, manager *StrategyManager) *Engine {
 	return &Engine{
-		db:      db,
-		manager: manager,
+		db:                db,
+		manager:           manager,
+		pendingSettlement: make([]string, 0),
 	}
 }
 
@@ -29,7 +32,7 @@ func (e *Engine) Run() {
 
 	for {
 		e.tick()
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 	}
 }
 
@@ -46,45 +49,22 @@ func (e *Engine) tick() {
 
 	// 2. 检查是否已处理
 	current := e.manager.GetState()
-	if current != nil && current.RoundID == latest.RoundID {
+	isNewRound := current == nil || current.RoundID != latest.RoundID
+
+	// 3. 如果不是新期号，只处理待结算列表
+	if !isNewRound {
+		e.processPendingSettlements()
 		return
 	}
 
 	log.Printf("💰 新期号: %s", latest.RoundID)
 
-	// 3. 结算上一期（查询获胜车型和特殊奖项）
-	if current != nil && current.RoundID != "" {
-		var winners []models.GameWinner
-		e.db.Where("round_id = ?", current.RoundID).Find(&winners)
-		
-		winnerNames := make([]string, 0, len(winners))
-		for _, w := range winners {
-			cleaned := cleanName(w.WinnerName)
-			winnerNames = append(winnerNames, cleaned)
-		}
-		
-		// 查询特殊奖项
-		specialReward := ""
-		var round models.GameRound
-		if err := e.db.Where("round_id = ?", current.RoundID).First(&round).Error; err == nil {
-			for _, sr := range SPECIAL_REWARDS {
-				if strings.Contains(round.ResultName, sr) {
-					specialReward = sr
-					break
-				}
-			}
-		}
-		
-		if len(winnerNames) > 0 {
-			log.Printf("🏆 上期结果: %v", winnerNames)
-			if specialReward != "" {
-				log.Printf("✨ 特殊奖项: %s", specialReward)
-			}
-			e.manager.SettleRound(current.RoundID, winnerNames, specialReward)
-		}
-	}
+	// 4. 将【当前新期号】加入待结算列表
+	// 因为之前已经有对这一期的预测了（在上一期时生成的）
+	// 例如：检测到07开奖 → 将07加入待结算 → 用07的结果验证之前对07的预测
+	e.addPendingSettlement(latest.RoundID)
 
-	// 4. 查询历史数据
+	// 5. 查询历史数据
 	var rounds []models.GameRound
 	e.db.Order("round_id DESC").Limit(50).Find(&rounds)
 
@@ -93,19 +73,130 @@ func (e *Engine) tick() {
 		rounds[i], rounds[len(rounds)-1-i] = rounds[len(rounds)-1-i], rounds[i]
 	}
 
-	// 5. 计算热度
+	// 6. 计算热度
 	scores := e.calcHeatScores(rounds, 30)
 
-	// 6. 计算两个策略
+	// 7. 计算两个策略
 	hot3 := StratHot3(scores)
 	balanced4 := StratBalanced4(scores)
 
-	log.Printf("  🎯 热门3码: %v", hot3)
-	log.Printf("  🎯 均衡4码: %v", balanced4)
+	// 8. 计算下一期期号（预测的目标期号）
+	nextRoundID := calcNextRoundID(latest.RoundID)
 
-	// 7. 更新策略预测
-	e.manager.UpdatePredictions(latest.RoundID, "热门3码", hot3)
-	e.manager.UpdatePredictions(latest.RoundID, "均衡4码", balanced4)
+	log.Printf("  🎯 热门3码: %v (目标期: %s)", hot3, nextRoundID)
+	log.Printf("  🎯 均衡4码: %v (目标期: %s)", balanced4, nextRoundID)
+
+	// 9. 更新策略预测
+	// currentRoundID=当前已开奖期号, targetRoundID=预测目标期号
+	e.manager.UpdatePredictions(latest.RoundID, nextRoundID, "热门3码", hot3)
+	e.manager.UpdatePredictions(latest.RoundID, nextRoundID, "均衡4码", balanced4)
+
+	// 10. 处理所有待结算的期号
+	e.processPendingSettlements()
+}
+
+// calcNextRoundID 计算下一期期号
+func calcNextRoundID(currentRoundID string) string {
+	// 尝试将期号转换为数字并加1
+	num := 0
+	for _, c := range currentRoundID {
+		if c >= '0' && c <= '9' {
+			num = num*10 + int(c-'0')
+		}
+	}
+	if num > 0 {
+		return fmt.Sprintf("%d", num+1)
+	}
+	return currentRoundID + "_next"
+}
+
+// addPendingSettlement 添加待结算期号
+func (e *Engine) addPendingSettlement(roundID string) {
+	// 检查是否已存在
+	for _, pending := range e.pendingSettlement {
+		if pending == roundID {
+			return
+		}
+	}
+	e.pendingSettlement = append(e.pendingSettlement, roundID)
+	log.Printf("📋 添加待结算期号: %s", roundID)
+}
+
+// processPendingSettlements 处理所有待结算的期号
+func (e *Engine) processPendingSettlements() {
+	if len(e.pendingSettlement) == 0 {
+		return
+	}
+
+	toRemove := make([]string, 0)
+
+	// 遍历所有待结算期号
+	for _, roundID := range e.pendingSettlement {
+		// 查询该期的开奖结果
+		var winners []models.GameWinner
+		e.db.Where("round_id = ?", roundID).Find(&winners)
+
+		// 如果没有开奖结果，跳过（等待数据写入）
+		if len(winners) == 0 {
+			continue
+		}
+
+		// 获取获胜车型名称
+		winnerNames := make([]string, 0, len(winners))
+		for _, w := range winners {
+			cleaned := cleanName(w.WinnerName)
+			winnerNames = append(winnerNames, cleaned)
+		}
+
+		// 查询特殊奖项
+		specialReward := ""
+		var round models.GameRound
+		if err := e.db.Where("round_id = ?", roundID).First(&round).Error; err == nil {
+			for _, sr := range SPECIAL_REWARDS {
+				if strings.Contains(round.ResultName, sr) {
+					specialReward = sr
+					break
+				}
+			}
+		}
+
+		// 执行结算
+		hasSettled := e.manager.SettleRound(roundID, winnerNames, specialReward)
+		
+		if hasSettled {
+			log.Printf("🏆 结算期号 %s: %v", roundID, winnerNames)
+			if specialReward != "" {
+				log.Printf("✨ 特殊奖项: %s", specialReward)
+			}
+		} else {
+			// 没有预测可结算（比如系统刚启动的第一期），也要移除
+			log.Printf("⏭️ 跳过期号 %s（无预测）", roundID)
+		}
+
+		// 只要开奖结果存在，就从待结算列表中移除（无论是否有预测）
+		toRemove = append(toRemove, roundID)
+	}
+
+	// 移除已处理的期号
+	if len(toRemove) > 0 {
+		newPending := make([]string, 0)
+		for _, roundID := range e.pendingSettlement {
+			shouldRemove := false
+			for _, r := range toRemove {
+				if r == roundID {
+					shouldRemove = true
+					break
+				}
+			}
+			if !shouldRemove {
+				newPending = append(newPending, roundID)
+			}
+		}
+		e.pendingSettlement = newPending
+		if len(newPending) > 0 || len(toRemove) > 0 {
+			log.Printf("✅ 已处理 %d 个期号，剩余待结算: %d", len(toRemove), len(newPending))
+		}
+	}
 }
 
 // calcHeatScores 计算热度评分
