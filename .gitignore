@@ -12,7 +12,6 @@ benz-sniper
 # Go
 *.test
 *.out
-go.sum
 
 # IDE
 .vscode/
