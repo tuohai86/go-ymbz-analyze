@@ -22,12 +22,13 @@ func New(manager *engine.StrategyManager) *Handler {
 
 // StatusResponse 状态响应
 type StatusResponse struct {
-	RoundID    string                   `json:"round_id"`
-	NextRound  string                   `json:"next_round"`
-	UpdatedAt  string                   `json:"updated_at"`
-	TimePassed int                      `json:"time_passed"`
-	Countdown  int                      `json:"countdown"`
-	Strategies []engine.StrategyResult  `json:"strategies"`
+	RoundID         string                   `json:"round_id"`
+	NextRound       string                   `json:"next_round"`
+	UpdatedAt       string                   `json:"updated_at"`
+	TimePassed      int                      `json:"time_passed"`
+	Countdown       int                      `json:"countdown"`
+	Strategies      []engine.StrategyResult  `json:"strategies"`
+	TotalRealProfit float64                  `json:"total_real_profit"` // 所有实盘注单总盈利
 }
 
 // GetStatus 获取当前状态（读锁）
@@ -37,12 +38,13 @@ func (h *Handler) GetStatus(c *gin.Context) {
 	
 	if s == nil {
 		c.JSON(http.StatusOK, StatusResponse{
-			RoundID:    "",
-			NextRound:  "",
-			UpdatedAt:  "",
-			TimePassed: 0,
-			Countdown:  0,
-			Strategies: []engine.StrategyResult{},
+			RoundID:         "",
+			NextRound:       "",
+			UpdatedAt:       "",
+			TimePassed:      0,
+			Countdown:       0,
+			Strategies:      []engine.StrategyResult{},
+			TotalRealProfit: 0.0,
 		})
 		return
 	}
@@ -62,13 +64,17 @@ func (h *Handler) GetStatus(c *gin.Context) {
 		}
 	}
 
+	// 计算所有实盘注单的总盈利
+	totalRealProfit := h.manager.GetTotalRealProfit()
+
 	c.JSON(http.StatusOK, StatusResponse{
-		RoundID:    s.RoundID,
-		NextRound:  nextRound,
-		UpdatedAt:  s.UpdatedAt.Format("15:04:05"),
-		TimePassed: timePassed,
-		Countdown:  countdown,
-		Strategies: s.Strategies,
+		RoundID:         s.RoundID,
+		NextRound:       nextRound,
+		UpdatedAt:       s.UpdatedAt.Format("15:04:05"),
+		TimePassed:      timePassed,
+		Countdown:       countdown,
+		Strategies:      s.Strategies,
+		TotalRealProfit: totalRealProfit,
 	})
 }
 

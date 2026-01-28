@@ -112,21 +112,30 @@ func (m *StrategyManager) SettleRound(roundID string, winners []string, specialR
 		}
 
 		// 判断是否命中：预测中是否有获胜车型
-		won := m.checkWin(state.LastPrediction, winners)
+		hitWinner := m.checkWin(state.LastPrediction, winners)
 
 		// 记录本期盈亏（在状态更新前）
 		profit := 0.0
 		statusBeforeUpdate := state.Status
 		betAmount := float64(len(state.LastPrediction)) * m.betAmount
 
-		if state.Status == StatusReal {
-			if won {
-				// 计算真实盈利：(命中车型赔率 - 1) * 单注金额 - (未命中车型数量 * 单注金额)
-				profit = m.calculateProfit(state.LastPrediction, winners)
-			} else {
-				// 输了：亏损所有下注金额
-				profit = -betAmount
-			}
+		// 计算盈利（虚盘和实盘都需要计算，用于判定胜负）
+		var won bool
+		if hitWinner {
+			// 计算真实盈利：(命中车型赔率 - 1) * 单注金额 - (未命中车型数量 * 单注金额)
+			profit = m.calculateProfit(state.LastPrediction, winners)
+			// 只有盈利 > 0 才算真正的赢，打平也算输
+			won = profit > 0
+		} else {
+			// 没有命中，直接判定为输
+			won = false
+			profit = -betAmount
+		}
+
+		// 实盘状态需要记录实际盈亏
+		if state.Status == StatusVirtual {
+			// 虚盘不记录盈亏，但需要判定胜负
+			profit = 0.0
 		}
 
 		// 根据当前状态执行流转逻辑
@@ -269,13 +278,16 @@ func (m *StrategyManager) GetState() *State {
 			statusText = "实盘下注"
 		}
 
+		// 从数据库计算该策略的实盘总盈利
+		realProfit := m.GetStrategyRealProfit(state.Name)
+
 		results = append(results, StrategyResult{
 			Name:          state.Name,
 			Predictions:   state.Predictions,
 			Status:        state.Status,
 			StatusText:    statusText,
 			VirtualStreak: state.VirtualStreak,
-			RealProfit:    state.RealProfit,
+			RealProfit:    realProfit, // 使用从数据库计算的值
 		})
 	}
 
@@ -296,13 +308,16 @@ func (m *StrategyManager) GetRealPredictions() []StrategyResult {
 		// 只返回实盘状态的策略
 		if state.Status == StatusReal {
 			statusText := "实盘下注"
+			// 从数据库计算该策略的实盘总盈利
+			realProfit := m.GetStrategyRealProfit(state.Name)
+			
 			results = append(results, StrategyResult{
 				Name:          state.Name,
 				Predictions:   state.Predictions,
 				Status:        state.Status,
 				StatusText:    statusText,
 				VirtualStreak: state.VirtualStreak,
-				RealProfit:    state.RealProfit,
+				RealProfit:    realProfit, // 使用从数据库计算的值
 			})
 		}
 	}
@@ -368,4 +383,40 @@ func (m *StrategyManager) ClearHistory() {
 	} else {
 		log.Println("📝 历史记录已清空")
 	}
+}
+
+// GetTotalRealProfit 计算所有实盘注单的总盈利（从数据库）
+func (m *StrategyManager) GetTotalRealProfit() float64 {
+	var totalProfit float64
+	
+	// 查询所有实盘状态的历史记录，累计盈利
+	err := m.db.Model(&models.StrategyHistory{}).
+		Where("status = ?", StatusReal).
+		Select("COALESCE(SUM(profit), 0)").
+		Scan(&totalProfit).Error
+	
+	if err != nil {
+		log.Printf("❌ 计算实盘总盈利失败: %v", err)
+		return 0.0
+	}
+	
+	return totalProfit
+}
+
+// GetStrategyRealProfit 计算单个策略的实盘总盈利（从数据库）
+func (m *StrategyManager) GetStrategyRealProfit(strategyName string) float64 {
+	var totalProfit float64
+	
+	// 查询指定策略的所有实盘状态的历史记录，累计盈利
+	err := m.db.Model(&models.StrategyHistory{}).
+		Where("strategy = ? AND status = ?", strategyName, StatusReal).
+		Select("COALESCE(SUM(profit), 0)").
+		Scan(&totalProfit).Error
+	
+	if err != nil {
+		log.Printf("❌ 计算策略 %s 实盘总盈利失败: %v", strategyName, err)
+		return 0.0
+	}
+	
+	return totalProfit
 }

@@ -28,24 +28,24 @@ const CountdownHero = {
     progress() {
       return Utils.calculateProgress(this.countdown, 34);
     },
-    
+
     // 倒计时显示文本
     countdownText() {
       return `${this.countdown}s`;
     },
-    
+
     // 环形进度条参数
     circularParams() {
       const radius = 60;
       const strokeWidth = 8;
       return Utils.getCircularProgress(radius, strokeWidth);
     },
-    
+
     // 计算stroke-dashoffset
     strokeDashoffset() {
       return this.circularParams.getDashoffset(this.progress);
     },
-    
+
     // 上期结果颜色类
     lastResColorClass() {
       if (!this.lastRes) return '';
