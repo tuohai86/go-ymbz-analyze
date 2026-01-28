@@ -139,6 +139,11 @@ type HistoryResponse struct {
 
 // GetHistory 获取历史记录（读锁，支持分页和筛选）
 func (h *Handler) GetHistory(c *gin.Context) {
+	// 禁止缓存，确保每次获取最新数据
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
+	
 	// 获取查询参数
 	page := 1
 	pageSize := 20

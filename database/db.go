@@ -17,9 +17,11 @@ var DB *gorm.DB
 func Init(cfg *config.Config) error {
 	dsn := cfg.GetDSN()
 	
-	// 配置 GORM（只打印慢查询和错误，不打印普通SQL）
+	// 配置 GORM（禁用缓存，确保每次查询都是新鲜的）
 	gormConfig := &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Warn),
+		Logger:                 logger.Default.LogMode(logger.Warn),
+		SkipDefaultTransaction: true,  // 跳过默认事务，提高性能
+		PrepareStmt:            false, // 禁用预编译语句缓存
 		NowFunc: func() time.Time {
 			return time.Now().Local()
 		},

@@ -1196,13 +1196,19 @@
                         const params = new URLSearchParams({
                             page: this.historyPage,
                             page_size: this.historyPageSize,
-                            real_only: this.realOnly ? '1' : '0'
+                            real_only: this.realOnly ? '1' : '0',
+                            _t: Date.now() // 防止缓存
                         });
                         const response = await fetch(`/api/history?${params}`);
                         const json = await response.json();
                         this.history = json.records || [];
                         this.historyTotal = json.total || 0;
                         this.historyTotalPages = json.total_pages || 0;
+                        // 调试：检查是否有用户下注数据
+                        const recordsWithBets = this.history.filter(r => r.user_bets && r.user_bets.length > 0);
+                        if (recordsWithBets.length > 0) {
+                            console.log('包含用户下注的记录:', recordsWithBets.length, '条');
+                        }
                     } catch (error) {
                         console.error('获取历史记录失败:', error);
                     }

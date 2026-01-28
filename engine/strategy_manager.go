@@ -589,17 +589,16 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 		params.PageSize = 100
 	}
 
-	// 构建基础查询条件
-	baseQuery := m.db.Model(&models.StrategyHistory{})
-	
-	// 筛选实盘记录
-	if params.RealOnly {
-		baseQuery = baseQuery.Where("status = ?", StatusReal)
-	}
+	// 获取新的数据库会话（避免任何缓存）
+	db := m.db.Session(&gorm.Session{NewDB: true})
 
-	// 查询总数（使用新的 Session 避免污染）
+	// 查询总数
 	var total int64
-	if err := baseQuery.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+	countQuery := db.Table("strategy_history")
+	if params.RealOnly {
+		countQuery = countQuery.Where("status = ?", StatusReal)
+	}
+	if err := countQuery.Count(&total).Error; err != nil {
 		log.Printf("❌ 查询历史记录总数失败: %v", err)
 		return HistoryResult{
 			Records:    []HistoryRecord{},
@@ -613,16 +612,19 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 	// 计算总页数
 	totalPages := int((total + int64(params.PageSize) - 1) / int64(params.PageSize))
 
-	// 分页查询（使用新的 Session）
+	// 分页查询（使用新的会话）
 	offset := (params.Page - 1) * params.PageSize
 	var dbRecords []models.StrategyHistory
-	err := baseQuery.Session(&gorm.Session{}).
-		Order("created_at DESC, id DESC").
+	
+	dataQuery := db.Table("strategy_history")
+	if params.RealOnly {
+		dataQuery = dataQuery.Where("status = ?", StatusReal)
+	}
+	
+	if err := dataQuery.Order("created_at DESC, id DESC").
 		Limit(params.PageSize).
 		Offset(offset).
-		Find(&dbRecords).Error
-	
-	if err != nil {
+		Find(&dbRecords).Error; err != nil {
 		log.Printf("❌ 查询历史记录失败: %v", err)
 		return HistoryResult{
 			Records:    []HistoryRecord{},
@@ -632,20 +634,30 @@ func (m *StrategyManager) GetHistory(params HistoryQueryParams) HistoryResult {
 			PageSize:   params.PageSize,
 		}
 	}
-
-	// 收集所有期号，用于查询用户派彩记录
-	roundIDs := make([]string, 0, len(dbRecords))
-	for _, dbRecord := range dbRecords {
-		roundIDs = append(roundIDs, dbRecord.RoundID)
+	
+	log.Printf("📋 历史记录查询: 总数=%d, 本页=%d条, 页码=%d", total, len(dbRecords), params.Page)
+	if len(dbRecords) > 0 {
+		log.Printf("📋 最新记录ID=%d, 期号=%s", dbRecords[0].ID, dbRecords[0].RoundID)
 	}
 
-	// 查询用户派彩记录
+	// 收集所有期号，用于查询用户派彩记录（去重）
+	roundIDSet := make(map[string]bool)
+	for _, dbRecord := range dbRecords {
+		roundIDSet[dbRecord.RoundID] = true
+	}
+	roundIDs := make([]string, 0, len(roundIDSet))
+	for rid := range roundIDSet {
+		roundIDs = append(roundIDs, rid)
+	}
+
+	// 查询用户派彩记录（使用新的会话）
 	userBetsMap := make(map[string][]UserBetRecord)
 	if len(roundIDs) > 0 {
 		var userBets []models.UserBet
-		if err := m.db.Where("round_id IN ?", roundIDs).Find(&userBets).Error; err != nil {
+		if err := db.Table("user_bets").Where("round_id IN ?", roundIDs).Find(&userBets).Error; err != nil {
 			log.Printf("⚠️ 查询用户派彩记录失败: %v", err)
 		} else {
+			log.Printf("📊 查询到 %d 条用户派彩记录，期号: %v", len(userBets), roundIDs)
 			// 按期号分组
 			for _, ub := range userBets {
 				userBetsMap[ub.RoundID] = append(userBetsMap[ub.RoundID], UserBetRecord{
